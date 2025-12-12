@@ -29,7 +29,8 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- HEADER ---
-st.title("Sistem Prediksi Kelulusan Mahasiswa")
+st.title("Sistem Prediksi Kelulusan")
+st.subheader("Mahasiswa Semester 3 - Program Studi Pendidikan Teknologi Informasi")
 st.markdown("Masukkan data akademik dan sosial ekonomi untuk menganalisis potensi kelulusan.")
 st.divider()
 
