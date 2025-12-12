@@ -1,120 +1,192 @@
 import streamlit as st
 import pandas as pd
 import joblib
+import numpy as np
 
-# Load Model dan kelengkapannya
-model = joblib.load('knn_full_model.pkl')
-scaler = joblib.load('scaler_full.pkl')
-le = joblib.load('label_encoder_full.pkl')
-feature_names = joblib.load('feature_names.pkl')
+# --- CONFIG ---
+st.set_page_config(page_title="Prediksi Kelulusan Mahasiswa", layout="wide")
 
-st.set_page_config(page_title="Student Dropout Prediction", layout="wide")
+# --- LOAD MODEL ---
+try:
+    artifacts = joblib.load('student_prediction_artifacts.pkl')
+    model = artifacts['model']
+    scaler = artifacts['scaler']
+    encoders = artifacts['encoders']
+    target_le = artifacts['target_encoder']
+    feature_names = artifacts['feature_names']
+    cat_cols = artifacts['cat_cols']
+except FileNotFoundError:
+    st.error("Error: File model tidak ditemukan! Harap jalankan 'python train_model.py' dulu.")
+    st.stop()
 
-st.title("🎓 Sistem Prediksi Kelulusan Mahasiswa")
-st.markdown("Menggunakan **K-Nearest Neighbors (KNN)** dengan **34 Fitur Lengkap**")
-st.info("Masukkan data mahasiswa secara lengkap di bawah ini untuk melakukan prediksi.")
+# --- CSS ---
+st.markdown("""
+<style>
+    .stTabs [data-baseweb="tab-list"] { gap: 8px; }
+    .stTabs [data-baseweb="tab"] { height: 45px; font-weight: 600; }
+    div[data-testid="stMetricValue"] { font-size: 18px; }
+</style>
+""", unsafe_allow_html=True)
 
-# Form Input
-with st.form("prediction_form"):
-    # Kita bagi 34 kolom menjadi kategori agar GUI rapi
-    # Tabulasi Input
-    tab1, tab2, tab3 = st.tabs(["👤 Data Demografi", "💰 Sosial & Ekonomi", "📚 Data Akademik"])
+# --- HEADER ---
+st.title("Sistem Prediksi Kelulusan Mahasiswa")
+st.markdown("Masukkan data akademik dan sosial ekonomi untuk menganalisis potensi kelulusan.")
+st.divider()
 
-    # Dictionary untuk menampung input user
+# --- HELPER FUNCTION ---
+def get_scale_value(label):
+    mapping = {
+        "Sangat Rendah (1)": 1, "Rendah (2)": 2, "Sedang (3)": 3, "Tinggi (4)": 4, "Sangat Tinggi (5)": 5,
+        "Sangat Santai (1)": 1, "Santai (2)": 2, "Cukup Tertekan (3)": 3, "Stres (4)": 4, "Sangat Stres (5)": 5
+    }
+    return mapping[label]
+
+with st.form("input_form"):
+    # TAB MENU
+    tab1, tab2, tab3, tab4 = st.tabs(["Data Diri", "Ekonomi", "Akademik", "Psikologis & Aktivitas"])
     input_data = {}
 
+    # TAB 1: DATA DIRI
     with tab1:
-        st.header("Data Pribadi & Keluarga")
-        col1, col2 = st.columns(2)
-        with col1:
-            input_data['Marital status'] = st.selectbox("Status Pernikahan (1=Single, 2=Married, etc)", [1,2,3,4,5,6])
-            input_data['Gender'] = st.selectbox("Jenis Kelamin (1=Laki, 0=Perempuan)", [1, 0])
-            input_data['Age at enrollment'] = st.number_input("Umur saat Masuk", 17, 70, 20)
-            input_data['Nacionality'] = st.selectbox("Kewarganegaraan (Kode)", [1, 41, 2, 6, 11, 13, 14, 17, 101])
-            input_data['International'] = st.selectbox("Mahasiswa Internasional?", [0, 1], format_func=lambda x: "Tidak" if x==0 else "Ya")
-        
-        with col2:
-            input_data["Mother's qualification"] = st.number_input("Pendidikan Ibu (Kode)", 1, 44, 1)
-            input_data["Father's qualification"] = st.number_input("Pendidikan Ayah (Kode)", 1, 44, 1)
-            input_data["Mother's occupation"] = st.number_input("Pekerjaan Ibu (Kode)", 1, 44, 1)
-            input_data["Father's occupation"] = st.number_input("Pekerjaan Ayah (Kode)", 1, 44, 1)
-            input_data['Displaced'] = st.selectbox("Displaced (Perantau?)", [1, 0], format_func=lambda x: "Ya" if x==1 else "Tidak")
-            input_data['Educational special needs'] = st.selectbox("Kebutuhan Khusus?", [0, 1])
+        st.subheader("Informasi Dasar")
+        c1, c2 = st.columns(2)
+        with c1:
+            input_data['UsiaMasuk'] = st.number_input("Usia Masuk Kuliah", 15, 50, 18)
+            input_data['JalurMasuk'] = st.selectbox("Jalur Masuk", encoders['JalurMasuk'].classes_)
+        with c2:
+            input_data['PendidikanSebelumnya'] = st.selectbox("Asal Sekolah", encoders['PendidikanSebelumnya'].classes_)
+            input_data['Jarak_km'] = st.number_input("Jarak Tempat Tinggal (km)", 0.0, 100.0, 5.0)
+            input_data['Transportasi'] = st.selectbox("Transportasi Utama", encoders['Transportasi'].classes_)
 
+    # TAB 2: EKONOMI
     with tab2:
-        st.header("Faktor Sosial Ekonomi")
-        col3, col4 = st.columns(2)
-        with col3:
-            input_data['Debtor'] = st.selectbox("Memiliki Hutang?", [0, 1], format_func=lambda x: "Tidak" if x==0 else "Ya")
-            input_data['Tuition fees up to date'] = st.selectbox("SPP Lancar?", [1, 0], format_func=lambda x: "Ya" if x==1 else "Tidak")
-            input_data['Scholarship holder'] = st.selectbox("Penerima Beasiswa?", [0, 1], format_func=lambda x: "Tidak" if x==0 else "Ya")
-        
-        with col4:
-            input_data['Unemployment rate'] = st.number_input("Tingkat Pengangguran Negara (%)", 0.0, 20.0, 10.0)
-            input_data['Inflation rate'] = st.number_input("Tingkat Inflasi (%)", -5.0, 20.0, 1.4)
-            input_data['GDP'] = st.number_input("GDP", -10.0, 10.0, 0.0)
-            input_data['Application mode'] = st.number_input("Mode Aplikasi (Kode)", 1, 18, 1)
-            input_data['Application order'] = st.number_input("Urutan Pilihan", 0, 9, 1)
-            input_data['Course'] = st.number_input("Kode Jurusan", 1, 9999, 33)
-            input_data['Daytime/evening attendance'] = st.selectbox("Waktu Kuliah", [1, 0], format_func=lambda x: "Siang" if x==1 else "Malam")
-            input_data['Previous qualification'] = st.number_input("Kualifikasi Sebelumnya", 1, 43, 1)
+        st.subheader("Latar Belakang Keluarga")
+        c3, c4 = st.columns(2)
+        with c3:
+            st.markdown("**Pekerjaan & Pendidikan Orang Tua**")
+            input_data['PendidikanIbu'] = st.selectbox("Pend. Terakhir Ibu", encoders['PendidikanIbu'].classes_)
+            input_data['PendidikanAyah'] = st.selectbox("Pend. Terakhir Ayah", encoders['PendidikanAyah'].classes_)
+            input_data['PekerjaanIbu'] = st.selectbox("Pekerjaan Ibu", encoders['PekerjaanIbu'].classes_)
+            input_data['PekerjaanAyah'] = st.selectbox("Pekerjaan Ayah", encoders['PekerjaanAyah'].classes_)
+        with c4:
+            st.markdown("**Kondisi Finansial**")
+            input_data['PendapatanKeluarga_Juta'] = st.number_input("Total Gaji Ortu (Juta Rupiah)", 0.0, 100.0, 5.0, step=0.5)
+            input_data['JenisTempatTinggal'] = st.selectbox("Status Tempat Tinggal", encoders['JenisTempatTinggal'].classes_)
+            input_data['KesulitanEkonomi'] = st.selectbox("Kondisi Ekonomi", [0, 1], format_func=lambda x: "Stabil / Cukup" if x==0 else "Ada Kesulitan Ekonomi")
+            input_data['PenerimaBeasiswa'] = st.selectbox("Status Beasiswa", [0, 1], format_func=lambda x: "Bukan Penerima" if x==0 else "Penerima Beasiswa")
 
+    # TAB 3: AKADEMIK
     with tab3:
-        st.header("Performa Akademik (Semester 1 & 2)")
-        col5, col6 = st.columns(2)
-        with col5:
-            st.subheader("Semester 1")
-            input_data['Curricular units 1st sem (credited)'] = st.number_input("Sem 1: SKS Diakui", 0, 20, 0)
-            input_data['Curricular units 1st sem (enrolled)'] = st.number_input("Sem 1: SKS Diambil", 0, 20, 5)
-            input_data['Curricular units 1st sem (evaluations)'] = st.number_input("Sem 1: Jumlah Evaluasi", 0, 20, 5)
-            input_data['Curricular units 1st sem (approved)'] = st.number_input("Sem 1: SKS Lulus", 0, 20, 5)
-            input_data['Curricular units 1st sem (grade)'] = st.number_input("Sem 1: Rata-rata Nilai", 0.0, 20.0, 12.0)
-            input_data['Curricular units 1st sem (without evaluations)'] = st.number_input("Sem 1: Tanpa Evaluasi", 0, 10, 0)
+        st.subheader("Performa Akademik (Tahun Pertama)")
+        c5, c6 = st.columns(2)
+        with c5:
+            st.markdown("**:blue[Semester 1]**")
+            input_data['SKS_Diambil_S1'] = st.number_input("SKS Diambil (Sems 1)", 0, 24, 20)
+            input_data['SKS_Lulus_S1'] = st.number_input("SKS Lulus (Sems 1)", 0, 24, 20)
+            input_data['IP_S1'] = st.number_input("IP Semester 1", 0.00, 4.00, 3.50)
+            input_data['NilaiRata_S1'] = st.number_input("Rata-rata Nilai Angka Sems 1 (0-100)", 0.0, 100.0, 80.0)
+            input_data['Presensi_S1'] = st.slider("Kehadiran Kuliah Sems 1 (%)", 0, 100, 90)
+        with c6:
+            st.markdown("**:blue[Semester 2]**")
+            input_data['SKS_Diambil_S2'] = st.number_input("SKS Diambil (Sems 2)", 0, 24, 20)
+            input_data['SKS_Lulus_S2'] = st.number_input("SKS Lulus (Sems 2)", 0, 24, 20)
+            input_data['IP_S2'] = st.number_input("IP Semester 2", 0.00, 4.00, 3.50)
+            input_data['NilaiRata_S2'] = st.number_input("Rata-rata Nilai Angka Sems 2 (0-100)", 0.0, 100.0, 80.0)
+            input_data['Presensi_S2'] = st.slider("Kehadiran Kuliah Sems 2 (%)", 0, 100, 90)
+        
+        st.markdown("---")
+        col_stat1, col_stat2 = st.columns(2)
+        with col_stat1:
+            input_data['UKT_TepatWaktu'] = st.radio("Riwayat Pembayaran UKT", [1, 0], format_func=lambda x: "Selalu Tepat Waktu" if x==1 else "Pernah Menunggak")
+        with col_stat2:
+            input_data['PeringatanAkademik'] = st.radio("Status Surat Peringatan (SP)", [0, 1], format_func=lambda x: "Aman (Tidak Ada)" if x==0 else "Pernah Mendapat SP")
 
-        with col6:
-            st.subheader("Semester 2")
-            input_data['Curricular units 2nd sem (credited)'] = st.number_input("Sem 2: SKS Diakui", 0, 20, 0)
-            input_data['Curricular units 2nd sem (enrolled)'] = st.number_input("Sem 2: SKS Diambil", 0, 20, 5)
-            input_data['Curricular units 2nd sem (evaluations)'] = st.number_input("Sem 2: Jumlah Evaluasi", 0, 20, 5)
-            input_data['Curricular units 2nd sem (approved)'] = st.number_input("Sem 2: SKS Lulus", 0, 20, 5)
-            input_data['Curricular units 2nd sem (grade)'] = st.number_input("Sem 2: Rata-rata Nilai", 0.0, 20.0, 12.0)
-            input_data['Curricular units 2nd sem (without evaluations)'] = st.number_input("Sem 2: Tanpa Evaluasi", 0, 10, 0)
+    # TAB 4: PSIKOLOGIS & AKTIVITAS
+    with tab4:
+        st.subheader("Faktor Pendukung")
+        c7, c8 = st.columns(2)
+        with c7:
+            st.markdown("**Keaktifan & Prestasi**")
+            input_data['KeikutsertaanKlub'] = st.selectbox("Keikutsertaan Organisasi", [0, 1], format_func=lambda x: "Tidak Ikut" if x==0 else "Aktif Mengikuti")
+            input_data['PeranOrganisasi'] = st.selectbox("Peran Dominan", encoders['PeranOrganisasi'].classes_)
+            input_data['KeikutsertaanLomba'] = st.selectbox("Riwayat Lomba", [0, 1], format_func=lambda x: "Tidak Pernah" if x==0 else "Pernah Mengikuti")
+            input_data['Pencapaian'] = st.slider("Jumlah Sertifikat/Prestasi", 0, 10, 0)
 
-    # Tombol Submit
-    submit = st.form_submit_button("🚀 Prediksi Sekarang")
-
-if submit:
-    # 1. Konversi input dictionary ke DataFrame sesuai urutan feature_names
-    # Ini menjamin urutan kolom SAMA PERSIS dengan saat training
-    input_df = pd.DataFrame([input_data])
-    
-    # Reorder kolom untuk keamanan (jika urutan di dict berantakan)
-    input_df = input_df[feature_names]
-
-    # 2. Scaling Data (Wajib untuk KNN)
-    input_scaled = scaler.transform(input_df)
-
-    # 3. Prediksi
-    prediction_idx = model.predict(input_scaled)
-    prediction_label = le.inverse_transform(prediction_idx)[0]
-    probabilities = model.predict_proba(input_scaled)[0]
-
-    # 4. Tampilkan Hasil
-    st.divider()
-    st.subheader("Hasil Prediksi")
-    
-    col_res1, col_res2 = st.columns([1, 2])
-    
-    with col_res1:
-        if prediction_label == 'Dropout':
-            st.error(f"Status: **{prediction_label}**")
-        elif prediction_label == 'Graduate':
-            st.success(f"Status: **{prediction_label}**")
-        else:
-            st.warning(f"Status: **{prediction_label}**")
+        with c8:
+            st.markdown("**Kondisi Mental & Dukungan**")
+            motivasi_str = st.select_slider("Tingkat Motivasi Belajar", options=["Sangat Rendah (1)", "Rendah (2)", "Sedang (3)", "Tinggi (4)", "Sangat Tinggi (5)"], value="Tinggi (4)")
+            input_data['MotivasiBelajar'] = get_scale_value(motivasi_str)
             
-    with col_res2:
-        st.write("Probabilitas Model:")
-        classes = le.classes_
-        for i, class_name in enumerate(classes):
-            st.progress(float(probabilities[i]), text=f"{class_name}: {probabilities[i]*100:.1f}%")
+            dukungan_str = st.select_slider("Dukungan Orang Tua", options=["Sangat Rendah (1)", "Rendah (2)", "Sedang (3)", "Tinggi (4)", "Sangat Tinggi (5)"], value="Sangat Tinggi (5)")
+            input_data['DukunganOrangTua'] = get_scale_value(dukungan_str)
+            
+            stres_str = st.select_slider("Tingkat Stres Mahasiswa", options=["Sangat Santai (1)", "Santai (2)", "Cukup Tertekan (3)", "Stres (4)", "Sangat Stres (5)"], value="Santai (2)")
+            input_data['TingkatStres'] = get_scale_value(stres_str)
+
+        # Default features (Hidden)
+        input_data['AnakPertamaKuliah'] = 0
+        input_data['MahasiswaBekerja'] = 0
+        input_data['PunyaLaptop'] = 1
+        input_data['SertifOspekFakultas'] = 1
+        input_data['SertifOspekDepartemen'] = 1
+
+    st.markdown("---")
+    submit = st.form_submit_button("Mulai Proses Analisis", type="primary", use_container_width=True)
+
+# --- LOGIKA PREDIKSI ---
+if submit:
+    # SIAPKAN DATA
+    df_input = pd.DataFrame([input_data])
+    df_input = df_input[feature_names]
+    
+    # ENCODE & SCALE
+    for col in cat_cols:
+        le = encoders[col]
+        df_input[col] = le.transform(df_input[col])
+    
+    X_input = scaler.transform(df_input)
+    
+    # HITUNG PREDIKSI & PROBABILITAS
+    pred_idx = model.predict(X_input)[0]
+    pred_label = target_le.inverse_transform([pred_idx])[0]
+    proba = model.predict_proba(X_input)[0]
+    
+    # Ambil Nilai Persentase Tertinggi
+    max_prob = np.max(proba) * 100
+    
+    # TAMPILKAN HASIL
+    st.divider()
+    st.subheader("Hasil Analisis Sistem")
+    
+    col_kiri, col_kanan = st.columns([1, 2])
+    
+    with col_kiri:
+        # Menampilkan teks formal dengan persentase
+        if pred_label == 'Dropout':
+            st.error(f"Prediksi: {pred_label}")
+            st.write(f"**Tingkat Keyakinan Sistem: {max_prob:.2f}%**")
+            st.markdown("---")
+            st.markdown("**Rekomendasi:** Mahasiswa terdeteksi berisiko tinggi. Perlu pendampingan akademik intensif segera.")
+            
+        elif pred_label == 'Lulus Terlambat':
+            st.warning(f"Prediksi: {pred_label}")
+            st.write(f"**Tingkat Keyakinan Sistem: {max_prob:.2f}%**")
+            st.markdown("---")
+            st.markdown("**Rekomendasi:** Mahasiswa perlu evaluasi beban studi agar bisa mengejar ketertinggalan.")
+            
+        else:
+            st.success(f"Prediksi: {pred_label}")
+            st.write(f"**Tingkat Keyakinan Sistem: {max_prob:.2f}%**")
+            st.markdown("---")
+            st.markdown("**Keterangan:** Performa mahasiswa terpantau baik dan sesuai jalur (On-Track).")
+            
+    with col_kanan:
+        st.write("Detail Probabilitas per Kategori:")
+        # Chart sederhana
+        prob_df = pd.DataFrame({
+            "Status": target_le.classes_,
+            "Probabilitas (%)": proba * 100 
+        }).set_index("Status")
+        
+        # Format angka di tabel chart 
+        st.bar_chart(prob_df)
